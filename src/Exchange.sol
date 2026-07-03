@@ -37,13 +37,14 @@ contract Exchange is ERC20 {
     error Exchange__InsufficientLiquidity();
     error Exchange__InvalidReserves();
     error Exchange__InvalidTokenAmount();
-    error Exchange__TokenTransferedFailed();
+    error Exchange__TokenTransferedFailed(string);
     error Exchange__InsufficientEthAmount();
     error Exchange__InputAmountLessThenExpected(
         uint256 etheInput,
         uint256 ExpectedTokenAmount
     );
     error Exchange__LiquidityPoolCannotBeZero();
+    error Exchange__EthTransferToUserFailed(string);
     /*//////////////////////////////////////////////////////////
                                 STORAGE
     //////////////////////////////////////////////////////////*/
@@ -121,7 +122,7 @@ contract Exchange is ERC20 {
                 _tokenAmount
             );
             if (!success) {
-                revert Exchange__TokenTransferedFailed();
+                revert Exchange__TokenTransferedFailed("[-] Token transfer failed with no liquidity");
             }
             liquidityMinted = msg.value;
         } else {
@@ -145,7 +146,7 @@ contract Exchange is ERC20 {
                 _tokenAmount
             );
             if (!success) {
-                revert Exchange__TokenTransferedFailed();
+                revert Exchange__TokenTransferedFailed("[-] Token transfer failed with liquidity");
             }
         }
 
@@ -161,12 +162,34 @@ contract Exchange is ERC20 {
             revert Exchange__LiquidityPoolCannotBeZero();
         }
         // liquidityBalance of user check kro
-        
-        // fir ethWithdrawn and tokensWithdrawn calculate kro
-        // then stateVariable of ethReserve and tokenReserve update kro
-        // then _burn use kro to burn the function
-        // then send kro token user ko
+        uint256 lpBalance = balanceOf(msg.sender);
+        if (_lpAmount > lpBalance) {
+            revert Exchange__InsufficientLiquidity();
+        }
 
+        // fir ethWithdrawn and tokensWithdrawn calculate kro
+        ethAmount = s_ethReserve * _lpAmount / totalSupply();
+        tokenAmount = s_tokenReserve * _lpAmount / totalSupply();
+
+        // then stateVariable of ethReserve and tokenReserve update kro
+        s_ethReserve -= ethAmount;
+        s_tokenReserve -= tokenAmount;
+
+        // then _burn use kro to burn the function
+        _burn(msg.sender, _lpAmount);
+        // then send kro token user ko
+        bool success = i_token.transfer(msg.sender, tokenAmount);
+        if (!success) {
+            revert Exchange__TokenTransferedFailed("[-] Token transfer failed while burning liquidity");
+        }
+        
+        (bool sent , ) = address(msg.sender).call{value : ethAmount}("");
+        if (!sent) {
+            revert Exchange__EthTransferToUserFailed("[-] Eth transfer failed while burning liquidity");
+        }
+
+        emit RemoveLiquidity(msg.sender, ethAmount, tokenAmount);
+        return (ethAmount, tokenAmount);
 
     }
 
