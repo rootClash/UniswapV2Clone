@@ -8,9 +8,9 @@ import {Exchange} from "../src/Exchange.sol";
 import {Factory} from "../src/Factory.sol";
 
 contract TestExchange is Test {
-    ERC20Mock erc20;
-    Factory factory;
-    Exchange exchange;
+    ERC20Mock internal erc20;
+    Factory internal factory;
+    Exchange internal exchange;
     address user1 = makeAddr("user1");
     function setUp() public {
         erc20 = new ERC20Mock();
@@ -84,4 +84,41 @@ contract TestExchange is Test {
         assert(ethWithdraw == 100 ether);
         assert(tokenWithdraw == 100 ether);
     }
-}
+
+    function test_getInputPrice() public {
+        uint256 inputPrice = exchange.getInputPrice(1 ether, 10 ether, 500e18);
+        console.log("input price :" , inputPrice);
+    }
+
+    function test_getOutputPrice() public {
+        uint256 outputPrice = exchange.getOutputPrice(1 ether, 10 ether, 500e18);
+        console.log("output price :" , outputPrice);
+    }
+
+    function test_ethTokenSwap() public {
+        vm.deal(user1, 200 ether);
+        vm.startPrank(user1);
+        erc20.approve(address(exchange), type(uint256).max);
+        uint256 firstLiquidity = exchange.addLiquidity{value: 100 ether}(
+            100 ether
+        );
+        vm.stopPrank();
+
+        vm.deal(address(0x12) , 10 ether);
+        uint256 balanceOfUser = erc20.balanceOf(address(0x12));
+        (uint256 ethReserve , uint256 tokenReserve) = exchange.getReserve();
+        uint256 invariantBefore = ethReserve * tokenReserve;
+        console.log("Eth Reserve before : ",ethReserve);
+        console.log("Token Reserve before : ", tokenReserve);
+        uint256 expectedToken = exchange.getInputPrice(1 ether, ethReserve, tokenReserve);
+        vm.startPrank(address(0x12));
+        exchange.ethToTokenSwap{value : 1 ether}(expectedToken);
+        vm.stopPrank();
+        (uint256 ethReserveAfter , uint256 tokenReserveAfter) = exchange.getReserve();
+        uint256 invariantAfter = ethReserveAfter * tokenReserveAfter;
+        console.log("Eth Reserve : ", ethReserveAfter);
+        console.log("Tokens Reserve : ", tokenReserveAfter);
+        assert(erc20.balanceOf(address(0x12)) > balanceOfUser );
+        assertGe(invariantAfter , invariantBefore);
+    }
+}   
