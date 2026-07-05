@@ -45,6 +45,10 @@ contract Exchange is ERC20 {
     );
     error Exchange__LiquidityPoolCannotBeZero();
     error Exchange__EthTransferToUserFailed(string);
+    error Exchange__InsuffcientEth();
+    error Exchange__OutputAmountLessThanMinToken();
+    error Exchange__TokenTransferedToUserFailed();
+    error Exchange__InvariantBroked(uint256 newInv , uint256 oldInv);
     /*//////////////////////////////////////////////////////////
                                 STORAGE
     //////////////////////////////////////////////////////////*/
@@ -53,6 +57,9 @@ contract Exchange is ERC20 {
     uint256 private s_ethReserve;
     uint256 private s_tokenReserve;
     uint256 private constant MIN_ETH_TO_DEPOSIT = 1_000_000_000;
+    uint256 private constant SCALING_FACTOR = 1e18;
+    uint256 private constant CONSTANT_VAL = 10000;
+    uint256 private constant FEES_TO_COLLECT = 997;
     /*//////////////////////////////////////////////////////////
                                 EVENTS
     //////////////////////////////////////////////////////////*/
@@ -208,6 +215,11 @@ contract Exchange is ERC20 {
         uint256 outputReserve
     ) public pure returns (uint256) {
         // TODO: constant product formula, 0.3% fee
+        uint256 fees = inputAmount * FEES_TO_COLLECT;
+        uint256 numerator = outputReserve * fees;
+        uint256 denominator = inputReserve * CONSTANT_VAL + fees;
+        uint256 outputAmount = numerator / denominator;
+        return outputAmount;
     }
 
     function getOutputPrice(
@@ -215,7 +227,11 @@ contract Exchange is ERC20 {
         uint256 inputReserve,
         uint256 outputReserve
     ) public pure returns (uint256) {
-        // TODO: inverse of getInputPrice
+        uint256 fees = outputAmount * CONSTANT_VAL;
+        uint256 numerator = inputReserve * fees;
+        uint256 denominator = (outputReserve * FEES_TO_COLLECT) - (outputAmount * 997);
+        uint256 outputAmount = (numerator / denominator) + 1;
+        return outputAmount;
     }
 
     /*//////////////////////////////////////////////////////////
@@ -224,6 +240,39 @@ contract Exchange is ERC20 {
 
     function ethToTokenSwap(uint256 _minTokens) public payable {
         // TODO
+        // tumhara msg.value > 0
+        if(msg.value == 0){
+            revert Exchange__InsuffcientEth();
+        }
+        (uint256 ethReserve, uint256 tokenReserve) = getReserve();
+        // tum get input price nikal lo
+        uint256 outputAmount = getInputPrice(msg.value , ethReserve , tokenReserve);
+        // us sei tumhe expcted token milega including fees
+        // aur wo token >= _minToken se
+        if(outputAmount < _minTokens){
+            revert Exchange__OutputAmountLessThanMinToken();
+        }
+    
+        // aur eth_pool hoga = pichla eth_pool + msg.value
+        uint256 new_ethReserve = ethReserve + msg.value;
+        // then find the new token pool 
+        // (x + dx)(y - dy) = k
+        uint256 new_tokenReserve = tokenReserve - outputAmount;
+        // total token out = pichla_token_pool - new token pool
+        uint256 tokenOut = tokenReserve - new_tokenReserve;
+        uint256 oldInv = ethReserve * tokenReserve;
+        uint256 newInv = new_ethReserve * new_tokenReserve;
+        if(newInv < oldInv){
+            revert Exchange__InvariantBroked(newInv , oldInv);
+        }        // update the token pool value
+        s_ethReserve = new_ethReserve;
+        // update the eth pool value also
+        s_tokenReserve = new_tokenReserve;
+        // then trasfer the token to user
+        bool success = i_token.transfer(msg.sender , tokenOut);
+        if(!success){
+            revert Exchange__TokenTransferedToUserFailed();
+        }
     }
 
     function tokenToEthSwap(uint256 _tokensSold, uint256 _minEth) public {
