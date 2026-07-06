@@ -26,6 +26,7 @@ pragma solidity ^0.8.24;
 
 import {ERC20, IERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import {IFactory} from "../src/interfaces/IFactory.sol";
+import {console} from "forge-std/console.sol";
 
 contract Exchange is ERC20 {
     /*//////////////////////////////////////////////////////////
@@ -33,22 +34,28 @@ contract Exchange is ERC20 {
     //////////////////////////////////////////////////////////*/
 
     error Exchange__InvalidTokenAddress();
-    error Exchange__InsufficientOutputAmount();
     error Exchange__InsufficientLiquidity();
     error Exchange__InvalidReserves();
     error Exchange__InvalidTokenAmount();
-    error Exchange__TokenTransferedFailed(string);
+    error Exchange__ERC20TransferFailed(string);
     error Exchange__InsufficientEthAmount();
+    error Exchange__InsufficientOutputAmount();
     error Exchange__InputAmountLessThenExpected(
         uint256 etheInput,
         uint256 ExpectedTokenAmount
     );
     error Exchange__LiquidityPoolCannotBeZero();
-    error Exchange__EthTransferToUserFailed(string);
-    error Exchange__InsuffcientEth();
-    error Exchange__OutputAmountLessThanMinToken();
-    error Exchange__TokenTransferedToUserFailed();
-    error Exchange__InvariantBroked(uint256 newInv , uint256 oldInv);
+    error Exchange__EthTransferFailed(string);
+    error Exchange__InsufficientEth();
+    error Exchange__InsufficientToken();
+    error Exchange__InsufficientInputAmount();
+    error Exchange__ApprovedTknTransferFailed();
+    error Exchange__SourceAndDestinationCannotBeSame();
+    error Exchange__InvalidExchangeAddress();
+    error Exchange__InsufficientEthForToken();
+    error Exchange__InsufficientExchangeEth();
+    error Exchange__EthTransferFailedInAnotherExchange();
+    error Exchange__TransferTknToUserFailed();
     /*//////////////////////////////////////////////////////////
                                 STORAGE
     //////////////////////////////////////////////////////////*/
@@ -57,7 +64,6 @@ contract Exchange is ERC20 {
     uint256 private s_ethReserve;
     uint256 private s_tokenReserve;
     uint256 private constant MIN_ETH_TO_DEPOSIT = 1_000_000_000;
-    uint256 private constant SCALING_FACTOR = 1e18;
     uint256 private constant CONSTANT_VAL = 10000;
     uint256 private constant FEES_TO_COLLECT = 997;
     /*//////////////////////////////////////////////////////////
@@ -129,7 +135,9 @@ contract Exchange is ERC20 {
                 _tokenAmount
             );
             if (!success) {
-                revert Exchange__TokenTransferedFailed("[-] Token transfer failed with no liquidity");
+                revert Exchange__ERC20TransferFailed(
+                    "Token transfer failed with no liquidity"
+                );
             }
             liquidityMinted = msg.value;
         } else {
@@ -153,7 +161,9 @@ contract Exchange is ERC20 {
                 _tokenAmount
             );
             if (!success) {
-                revert Exchange__TokenTransferedFailed("[-] Token transfer failed with liquidity");
+                revert Exchange__ERC20TransferFailed(
+                    "Token transfer failed with liquidity"
+                );
             }
         }
 
@@ -175,8 +185,8 @@ contract Exchange is ERC20 {
         }
 
         // fir ethWithdrawn and tokensWithdrawn calculate kro
-        ethAmount = s_ethReserve * _lpAmount / totalSupply();
-        tokenAmount = s_tokenReserve * _lpAmount / totalSupply();
+        ethAmount = (s_ethReserve * _lpAmount) / totalSupply();
+        tokenAmount = (s_tokenReserve * _lpAmount) / totalSupply();
 
         // then stateVariable of ethReserve and tokenReserve update kro
         s_ethReserve -= ethAmount;
@@ -187,26 +197,32 @@ contract Exchange is ERC20 {
         // then send kro token user ko
         bool success = i_token.transfer(msg.sender, tokenAmount);
         if (!success) {
-            revert Exchange__TokenTransferedFailed("[-] Token transfer failed while burning liquidity");
+            revert Exchange__ERC20TransferFailed(
+                "Token transfer failed while burning liquidity"
+            );
         }
-        
-        (bool sent , ) = address(msg.sender).call{value : ethAmount}("");
+
+        (bool sent, ) = address(msg.sender).call{value: ethAmount}("");
         if (!sent) {
-            revert Exchange__EthTransferToUserFailed("[-] Eth transfer failed while burning liquidity");
+            revert Exchange__EthTransferFailed(
+                "Eth transfer failed while burning liquidity"
+            );
         }
 
         emit RemoveLiquidity(msg.sender, ethAmount, tokenAmount);
         return (ethAmount, tokenAmount);
-
     }
 
     /*//////////////////////////////////////////////////////////
                             PRICING LOGIC
     //////////////////////////////////////////////////////////*/
 
-    function getReserve() public view returns (uint256 ethReserve , uint256 tokenReserve) {
-        return (s_ethReserve , s_tokenReserve);
-
+    function getReserve()
+        public
+        view
+        returns (uint256 ethReserve, uint256 tokenReserve)
+    {
+        return (s_ethReserve, s_tokenReserve);
     }
 
     function getInputPrice(
@@ -229,9 +245,9 @@ contract Exchange is ERC20 {
     ) public pure returns (uint256) {
         uint256 fees = outputAmount * CONSTANT_VAL;
         uint256 numerator = inputReserve * fees;
-        uint256 denominator = (outputReserve * FEES_TO_COLLECT) - (outputAmount * 997);
-        uint256 outputAmount = (numerator / denominator) + 1;
-        return outputAmount;
+        uint256 denominator = (outputReserve * FEES_TO_COLLECT) -
+            (outputAmount * 997);
+        return (numerator / denominator) + 1;
     }
 
     /*//////////////////////////////////////////////////////////
@@ -241,42 +257,91 @@ contract Exchange is ERC20 {
     function ethToTokenSwap(uint256 _minTokens) public payable {
         // TODO
         // tumhara msg.value > 0
-        if(msg.value == 0){
-            revert Exchange__InsuffcientEth();
+        if (msg.value == 0) {
+            revert Exchange__InsufficientEth();
         }
         (uint256 ethReserve, uint256 tokenReserve) = getReserve();
         // tum get input price nikal lo
-        uint256 outputAmount = getInputPrice(msg.value , ethReserve , tokenReserve);
+        uint256 outputAmount = getInputPrice(
+            msg.value,
+            ethReserve,
+            tokenReserve
+        );
         // us sei tumhe expcted token milega including fees
         // aur wo token >= _minToken se
-        if(outputAmount < _minTokens){
-            revert Exchange__OutputAmountLessThanMinToken();
+        if (outputAmount < _minTokens) {
+            revert Exchange__InsufficientOutputAmount();
         }
-    
+
         // aur eth_pool hoga = pichla eth_pool + msg.value
         uint256 new_ethReserve = ethReserve + msg.value;
-        // then find the new token pool 
+        // then find the new token pool
         // (x + dx)(y - dy) = k
         uint256 new_tokenReserve = tokenReserve - outputAmount;
         // total token out = pichla_token_pool - new token pool
         uint256 tokenOut = tokenReserve - new_tokenReserve;
         uint256 oldInv = ethReserve * tokenReserve;
         uint256 newInv = new_ethReserve * new_tokenReserve;
-        if(newInv < oldInv){
-            revert Exchange__InvariantBroked(newInv , oldInv);
-        }        // update the token pool value
+        if (newInv < oldInv) {
+            revert Exchange__InvalidReserves();
+        } // update the token pool value
         s_ethReserve = new_ethReserve;
         // update the eth pool value also
         s_tokenReserve = new_tokenReserve;
         // then trasfer the token to user
-        bool success = i_token.transfer(msg.sender , tokenOut);
-        if(!success){
-            revert Exchange__TokenTransferedToUserFailed();
+        bool success = i_token.transfer(msg.sender, tokenOut);
+        if (!success) {
+            revert Exchange__ERC20TransferFailed("Token swap transfer failed");
         }
     }
 
     function tokenToEthSwap(uint256 _tokensSold, uint256 _minEth) public {
         // TODO
+        // _tokensSold > 0
+        if (_tokensSold == 0) {
+            revert Exchange__InsufficientToken();
+        }
+        // getReserve
+        (uint256 ethReserve, uint256 tokenReserve) = getReserve();
+        uint256 invariantBefore = ethReserve * tokenReserve;
+        // get the input amount
+        uint256 ethOutput = getInputPrice(
+            _tokensSold,
+            tokenReserve,
+            ethReserve
+        );
+        // the value >= then the _minEth
+        if (ethOutput < _minEth) {
+            revert Exchange__InsufficientOutputAmount();
+        }
+        // new token pool =  old token pool +tokenSOld
+        uint256 new_tokenPool = tokenReserve + _tokensSold;
+        // new eth pool = old eth pool - the value
+        uint256 new_ethPool = ethReserve - ethOutput;
+
+        uint256 invariantAfter = new_tokenPool * new_ethPool;
+
+        // check the invariant
+        if (invariantAfter < invariantBefore) {
+            revert Exchange__InvalidReserves();
+        }
+
+        s_ethReserve = new_ethPool;
+        s_tokenReserve = new_tokenPool;
+        // then send the eth to the user
+        bool successTransfer = i_token.transferFrom(
+            msg.sender,
+            address(this),
+            _tokensSold
+        );
+        if (!successTransfer) {
+            revert Exchange__ApprovedTknTransferFailed();
+        }
+        (bool success, ) = address(msg.sender).call{value: ethOutput}("");
+        // check the transaction status
+        if (!success) {
+            revert Exchange__EthTransferFailed("Token to ETH swap failed");
+        }
     }
 
     function tokenToTokenSwap(
@@ -285,5 +350,63 @@ contract Exchange is ERC20 {
         address _targetToken
     ) public {
         // TODO: look up target Exchange via factory, route through ETH internally
+        address exchangeAddress = factory.getExchange(_targetToken);
+        // _targetToken != address(erc20)
+        if(_targetToken == address(i_token)){
+            revert Exchange__SourceAndDestinationCannotBeSame();
+        }
+        // get the Exchange address of the another token
+        address exchangeAddr = factory.getExchange(_targetToken);
+        // check that the exchange address != address(0)
+        if(exchangeAddr == address(0)){
+            revert Exchange__InvalidExchangeAddress();
+        }
+        // get the reserve
+        (uint256 ethReserve , uint256 tokenReserve) = getReserve();
+        // then use the getInputPrice to get the output price of eth
+        uint256 outputAmount = getInputPrice(
+            _tokensSold,
+            tokenReserve,
+            ethReserve
+        );
+        // check that eth amount
+        (uint256 ethBalance, uint256 tokenBalance) = Exchange(exchangeAddress).getReserve();
+        uint256 Ex_inputAmount = Exchange(exchangeAddress).getOutputPrice(
+            _minTokensBought,
+            tokenBalance,
+            ethBalance
+        );
+        if(outputAmount < Ex_inputAmount){
+            revert Exchange__InsufficientEthForToken();
+        }
+        // use that eth and spend that in exchange address
+        // This is the amount of tokens to get in anther exchange address
+        uint256 Ex_outputAmount = Exchange(exchangeAddress).getInputPrice(
+            outputAmount,
+            ethBalance,
+            tokenBalance
+        );
+        if(Ex_outputAmount < _minTokensBought){
+            revert Exchange__InsufficientExchangeEth();
+        }
+        // now change the state of the current exchange and the target exchange
+
+        uint256 invariantBefore = ethReserve * tokenReserve;
+        uint256 new_ethPool = ethReserve + outputAmount;
+        uint256 new_tokenPool = tokenReserve - _tokensSold;
+        uint256 invariantAfter = new_ethPool * new_tokenPool;
+        if(invariantBefore > invariantAfter){
+            revert Exchange__InvalidReserves();
+        }
+        s_ethReserve = new_ethPool;
+        s_tokenReserve = new_tokenPool;
+        // send that eth to that exchange address
+
+        Exchange(exchangeAddress).ethToTokenSwap{value : outputAmount}(Ex_outputAmount);
+        // send the token amount to the user
+        bool transferUser = IERC20(_targetToken).transfer(msg.sender , Ex_outputAmount);
+        if(!transferUser){
+            revert Exchange__TransferTknToUserFailed();
+        }
     }
 }
