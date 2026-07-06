@@ -12,6 +12,7 @@ contract TestExchange is Test {
     Factory internal factory;
     Exchange internal exchange;
     address user1 = makeAddr("user1");
+    address user3 = makeAddr("user3");
     function setUp() public {
         erc20 = new ERC20Mock();
         factory = new Factory();
@@ -22,6 +23,7 @@ contract TestExchange is Test {
             "E20M"
         );
         erc20.mint(user1, 200e18);
+        erc20.mint(user3, 10e18);
     }
 
     function testAddLiquidity() public {
@@ -51,7 +53,8 @@ contract TestExchange is Test {
         );
         console.log("Exchange's ETH Balance:", address(exchange).balance);
 
-        uint256 expectedliquidity = (100 ether * exchange.totalSupply()) / address(exchange).balance;
+        uint256 expectedliquidity = (100 ether * exchange.totalSupply()) /
+            address(exchange).balance;
         console.log("Expected LP Tokens:", expectedliquidity);
 
         uint256 secondLiquidity = exchange.addLiquidity{value: 100 ether}(
@@ -79,7 +82,9 @@ contract TestExchange is Test {
         uint256 firstLiquidity = exchange.addLiquidity{value: 100 ether}(
             100 ether
         );
-        (uint256 ethWithdraw , uint256 tokenWithdraw) = exchange.removeLiquidity(firstLiquidity);
+        (uint256 ethWithdraw, uint256 tokenWithdraw) = exchange.removeLiquidity(
+            firstLiquidity
+        );
         vm.stopPrank();
         assert(ethWithdraw == 100 ether);
         assert(tokenWithdraw == 100 ether);
@@ -87,12 +92,16 @@ contract TestExchange is Test {
 
     function test_getInputPrice() public {
         uint256 inputPrice = exchange.getInputPrice(1 ether, 10 ether, 500e18);
-        console.log("input price :" , inputPrice);
+        console.log("input price :", inputPrice);
     }
 
     function test_getOutputPrice() public {
-        uint256 outputPrice = exchange.getOutputPrice(1 ether, 10 ether, 500e18);
-        console.log("output price :" , outputPrice);
+        uint256 outputPrice = exchange.getOutputPrice(
+            1 ether,
+            10 ether,
+            500e18
+        );
+        console.log("output price :", outputPrice);
     }
 
     function test_ethTokenSwap() public {
@@ -104,21 +113,59 @@ contract TestExchange is Test {
         );
         vm.stopPrank();
 
-        vm.deal(address(0x12) , 10 ether);
+        vm.deal(address(0x12), 10 ether);
         uint256 balanceOfUser = erc20.balanceOf(address(0x12));
-        (uint256 ethReserve , uint256 tokenReserve) = exchange.getReserve();
+        (uint256 ethReserve, uint256 tokenReserve) = exchange.getReserve();
         uint256 invariantBefore = ethReserve * tokenReserve;
-        console.log("Eth Reserve before : ",ethReserve);
+        console.log("Eth Reserve before : ", ethReserve);
         console.log("Token Reserve before : ", tokenReserve);
-        uint256 expectedToken = exchange.getInputPrice(1 ether, ethReserve, tokenReserve);
+        uint256 expectedToken = exchange.getInputPrice(
+            1 ether,
+            ethReserve,
+            tokenReserve
+        );
         vm.startPrank(address(0x12));
-        exchange.ethToTokenSwap{value : 1 ether}(expectedToken);
+        exchange.ethToTokenSwap{value: 1 ether}(expectedToken);
         vm.stopPrank();
-        (uint256 ethReserveAfter , uint256 tokenReserveAfter) = exchange.getReserve();
+        (uint256 ethReserveAfter, uint256 tokenReserveAfter) = exchange
+            .getReserve();
         uint256 invariantAfter = ethReserveAfter * tokenReserveAfter;
         console.log("Eth Reserve : ", ethReserveAfter);
         console.log("Tokens Reserve : ", tokenReserveAfter);
-        assert(erc20.balanceOf(address(0x12)) > balanceOfUser );
-        assertGe(invariantAfter , invariantBefore);
+        assert(erc20.balanceOf(address(0x12)) > balanceOfUser);
+        assertGe(invariantAfter, invariantBefore);
     }
-}   
+
+    function test_tokenEthSwap() public {
+        uint256 _tokenToSwap = 10e18;
+        uint256 minEth = 1e15;
+        vm.deal(user1, 200 ether);
+        vm.startPrank(user1);
+        erc20.approve(address(exchange), type(uint256).max);
+        exchange.addLiquidity{value: 100 ether}(100 ether);
+        vm.stopPrank();
+
+        vm.startPrank(user3);
+        erc20.approve(address(exchange), _tokenToSwap);
+        (uint256 ethReserve, uint256 tokenReserve) =exchange.getReserve();
+        console.log("eth reserve : ",ethReserve);
+        console.log("token reserve : ",tokenReserve);
+        uint256 etheBalanceBefore = address(user3).balance;
+        uint256 tokenBalanceBefore = erc20.balanceOf(user3);
+        console.log("ether balance before : ",etheBalanceBefore);
+        console.log("token balance before : ",tokenBalanceBefore);
+
+        exchange.tokenToEthSwap(_tokenToSwap, minEth);
+        (uint256 ethReserveAfter, uint256 tokenReserveAfter) = exchange.getReserve();
+        console.log("eth reserve after : ",ethReserveAfter);
+        console.log("token reserve after : ",tokenReserveAfter);
+
+        uint256 etherBalanceAfter = address(user3).balance;
+        uint256 tokenBalanceAfter = erc20.balanceOf(user3);
+        console.log("ether balance after : ",etherBalanceAfter);
+        console.log("token balance after : ",tokenBalanceAfter);
+        vm.stopPrank();
+        assert(etherBalanceAfter > etheBalanceBefore);
+        assert(tokenBalanceAfter < tokenBalanceBefore);
+    }
+}
