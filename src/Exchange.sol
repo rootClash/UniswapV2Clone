@@ -27,7 +27,6 @@ pragma solidity ^0.8.24;
 import {ERC20, IERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import {IFactory} from "../src/interfaces/IFactory.sol";
 import {console} from "forge-std/console.sol";
-
 contract Exchange is ERC20 {
     /*//////////////////////////////////////////////////////////
                                 ERRORS
@@ -60,7 +59,7 @@ contract Exchange is ERC20 {
                                 STORAGE
     //////////////////////////////////////////////////////////*/
     IERC20 private immutable i_token;
-    IFactory private immutable factory;
+    IFactory private immutable i_factory;
     uint256 private s_ethReserve;
     uint256 private s_tokenReserve;
     uint256 private constant MIN_ETH_TO_DEPOSIT = 1_000_000_000;
@@ -100,10 +99,10 @@ contract Exchange is ERC20 {
         address _factoryAddress,
         string memory _name,
         string memory _symbol
-    ) ERC20(_name, _symbol) {
-        if (_token == address(0)) revert Exchange__InvalidTokenAddress();
+    ) ERC20(_name , _symbol){
+        if(_token == address(0)) revert Exchange__InvalidTokenAddress();
         i_token = IERC20(_token);
-        factory = IFactory(_factoryAddress);
+        i_factory = IFactory(_factoryAddress); 
     }
 
     /*//////////////////////////////////////////////////////////
@@ -349,20 +348,20 @@ contract Exchange is ERC20 {
         uint256 _minTokensBought,
         address _targetToken
     ) public {
-        // TODO: look up target Exchange via factory, route through ETH internally
-        address exchangeAddress = factory.getExchange(_targetToken);
+        // TODO: look up target Exchange via i_factory, route through ETH internally
+        address exchangeAddress = i_factory.getExchange(_targetToken);
         // _targetToken != address(erc20)
-        if(_targetToken == address(i_token)){
+        if (_targetToken == address(i_token)) {
             revert Exchange__SourceAndDestinationCannotBeSame();
         }
         // get the Exchange address of the another token
-        address exchangeAddr = factory.getExchange(_targetToken);
+        address exchangeAddr = i_factory.getExchange(_targetToken);
         // check that the exchange address != address(0)
-        if(exchangeAddr == address(0)){
+        if (exchangeAddr == address(0)) {
             revert Exchange__InvalidExchangeAddress();
         }
         // get the reserve
-        (uint256 ethReserve , uint256 tokenReserve) = getReserve();
+        (uint256 ethReserve, uint256 tokenReserve) = getReserve();
         // then use the getInputPrice to get the output price of eth
         uint256 outputAmount = getInputPrice(
             _tokensSold,
@@ -370,13 +369,14 @@ contract Exchange is ERC20 {
             ethReserve
         );
         // check that eth amount
-        (uint256 ethBalance, uint256 tokenBalance) = Exchange(exchangeAddress).getReserve();
+        (uint256 ethBalance, uint256 tokenBalance) = Exchange(exchangeAddress)
+            .getReserve();
         uint256 Ex_inputAmount = Exchange(exchangeAddress).getOutputPrice(
             _minTokensBought,
             tokenBalance,
             ethBalance
         );
-        if(outputAmount < Ex_inputAmount){
+        if (outputAmount < Ex_inputAmount) {
             revert Exchange__InsufficientEthForToken();
         }
         // use that eth and spend that in exchange address
@@ -386,26 +386,34 @@ contract Exchange is ERC20 {
             ethBalance,
             tokenBalance
         );
-        if(Ex_outputAmount < _minTokensBought){
+        if (Ex_outputAmount < _minTokensBought) {
             revert Exchange__InsufficientExchangeEth();
         }
         // now change the state of the current exchange and the target exchange
 
         uint256 invariantBefore = ethReserve * tokenReserve;
-        uint256 new_ethPool = ethReserve + outputAmount;
-        uint256 new_tokenPool = tokenReserve - _tokensSold;
+        uint256 new_ethPool = ethReserve - outputAmount;
+        uint256 new_tokenPool = tokenReserve + _tokensSold;
         uint256 invariantAfter = new_ethPool * new_tokenPool;
-        if(invariantBefore > invariantAfter){
+        console.log("invariant Before : ", invariantBefore);
+        console.log("invariant after : ", invariantAfter);
+        
+        if (invariantBefore > invariantAfter) {
             revert Exchange__InvalidReserves();
         }
         s_ethReserve = new_ethPool;
         s_tokenReserve = new_tokenPool;
         // send that eth to that exchange address
 
-        Exchange(exchangeAddress).ethToTokenSwap{value : outputAmount}(Ex_outputAmount);
+        Exchange(exchangeAddress).ethToTokenSwap{value: outputAmount}(
+            Ex_outputAmount
+        );
         // send the token amount to the user
-        bool transferUser = IERC20(_targetToken).transfer(msg.sender , Ex_outputAmount);
-        if(!transferUser){
+        bool transferUser = IERC20(_targetToken).transfer(
+            msg.sender,
+            Ex_outputAmount
+        );
+        if (!transferUser) {
             revert Exchange__TransferTknToUserFailed();
         }
     }
